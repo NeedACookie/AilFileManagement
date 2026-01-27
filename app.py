@@ -76,7 +76,7 @@ def initialize_session_state():
         st.session_state.safe_zones = [str(Path.home())]
     
     if "model_name" not in st.session_state:
-        st.session_state.model_name = "llama3.2"
+        st.session_state.model_name = "qwen3-coder:30b"
     
     if "temperature" not in st.session_state:
         st.session_state.temperature = 0.0
@@ -153,7 +153,7 @@ def main():
         model_name = st.text_input(
             "Ollama Model",
             value=st.session_state.model_name,
-            help="Name of the Ollama model to use (e.g., llama3.2, mistral)"
+            help="Name of the Ollama model to use (e.g., qwen3-coder:30b, llama3.2, mistral)"
         )
         
         temperature = st.slider(

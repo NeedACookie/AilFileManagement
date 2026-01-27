@@ -37,7 +37,12 @@ class SystemTools:
                 return {"status": "error", "message": f"Path does not exist: {path}"}
 
             usage = psutil.disk_usage(str(target_path))
-
+            
+            # Calculate "other" usage (for APFS containers where multiple volumes share space)
+            # Total = Used + Free + Other
+            other_used = usage.total - usage.used - usage.free
+            if other_used < 0: other_used = 0
+            
             def _format_bytes(bytes_value: int) -> str:
                 """Format bytes to human-readable format."""
                 for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -52,6 +57,7 @@ class SystemTools:
                 "total": usage.total,
                 "used": usage.used,
                 "free": usage.free,
+                "other": other_used,
                 "percent_used": usage.percent,
             }
 
@@ -59,6 +65,7 @@ class SystemTools:
                 result["total_formatted"] = _format_bytes(usage.total)
                 result["used_formatted"] = _format_bytes(usage.used)
                 result["free_formatted"] = _format_bytes(usage.free)
+                result["other_formatted"] = _format_bytes(other_used)
 
             return result
 
