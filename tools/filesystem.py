@@ -245,6 +245,74 @@ class FileSystemTools:
             return {"status": "error", "message": f"Search failed: {str(e)}"}
 
     @staticmethod
+    def search_directories(
+        path: str,
+        name_pattern: str,
+        case_sensitive: bool = False,
+        max_results: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Search for directories by name pattern.
+
+        Args:
+            path: Root directory to start search
+            name_pattern: Directory name pattern to match (e.g., "Development", "*dev*")
+            case_sensitive: If True, case-sensitive search
+            max_results: Maximum number of results to return
+
+        Returns:
+            Dictionary with status and matching directories
+        """
+        try:
+            search_path = Path(path).resolve()
+            if not search_path.exists():
+                return {"status": "error", "message": f"Path does not exist: {path}"}
+
+            matches = []
+            searched_count = 0
+
+            for root, dirs, _ in os.walk(search_path):
+                for dirname in dirs:
+                    searched_count += 1
+
+                    # Match pattern using fnmatch for glob support
+                    if case_sensitive:
+                        pattern_match = fnmatch.fnmatch(dirname, name_pattern)
+                    else:
+                        pattern_match = fnmatch.fnmatch(dirname.lower(), name_pattern.lower())
+                    
+                    if pattern_match:
+                        dir_path = Path(root) / dirname
+                        try:
+                            stat = dir_path.stat()
+                            matches.append({
+                                "name": dirname,
+                                "path": str(dir_path.absolute()),
+                                "parent": str(Path(root).absolute()),
+                                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            })
+
+                            if len(matches) >= max_results:
+                                break
+                        except (PermissionError, OSError):
+                            continue
+
+                if len(matches) >= max_results:
+                    break
+
+            return {
+                "status": "success",
+                "matches": matches,
+                "match_count": len(matches),
+                "searched_count": searched_count,
+                "truncated": len(matches) >= max_results,
+            }
+
+        except Exception as e:
+            return {"status": "error", "message": f"Directory search failed: {str(e)}"}
+
+
+    @staticmethod
     def read_file(
         path: str,
         encoding: str = "utf-8",

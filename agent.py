@@ -4,6 +4,12 @@ LangGraph agent for file system operations.
 Orchestrates LLM reasoning with tool execution using local Llama 3.2 via Ollama.
 """
 
+import os
+
+# Disable LangSmith tracing and external connections
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+os.environ["LANGCHAIN_ENDPOINT"] = ""
+
 from typing import Annotated, TypedDict, Sequence
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -68,7 +74,7 @@ class FileSystemAgent:
             recursive: bool = False,
             include_hidden: bool = False,
             pattern: str | None = None,
-            sort_by: str = "name",
+            sort_by: str | None = None,
         ) -> dict:
             """List directory contents with optional filtering and sorting.
             
@@ -77,14 +83,17 @@ class FileSystemAgent:
                 recursive: If True, list subdirectories recursively
                 include_hidden: If True, include hidden files
                 pattern: Glob pattern to filter files (e.g., "*.py")
-                sort_by: Sort by "name", "size", "modified", "created", or "type"
+                sort_by: Sort by "name", "size", "modified", "created", or "type" (default: "name")
             """
+            # Default sort_by to "name" if None
+            sort_option = sort_by if sort_by is not None else "name"
+            
             return FileSystemTools.list_directory(
                 path=path,
                 recursive=recursive,
                 include_hidden=include_hidden,
                 pattern=pattern,
-                sort_by=sort_by,
+                sort_by=sort_option,
             )
 
         @tool
@@ -114,6 +123,56 @@ class FileSystemAgent:
                 min_size=min_size,
                 max_size=max_size,
             )
+
+        @tool
+        def search_directories(
+            path: str,
+            name_pattern: str,
+            max_results: int | None = None,
+        ) -> str:
+            """Search for directories by name pattern across the file system.
+            
+            Use this tool to find directories/folders by name. Returns a formatted list of absolute paths.
+            
+            Args:
+                path: Root directory to start search (use "/" for entire system)
+                name_pattern: Directory name pattern to match (e.g., "Development", "*dev*", "Project*")
+                max_results: Maximum number of results (None or large number for unlimited)
+            
+            Returns:
+                Formatted string with list of matching directory paths
+            """
+            # Use 1000 as default for "unlimited" search
+            limit = max_results if max_results is not None else 1000
+            result = FileSystemTools.search_directories(
+                path=path,
+                name_pattern=name_pattern,
+                max_results=limit,
+            )
+            
+            # Format the results for better LLM understanding
+            if result.get("status") == "error":
+                return f"Error: {result.get('message')}"
+            
+            matches = result.get("matches", [])
+            match_count = result.get("match_count", 0)
+            
+            if match_count == 0:
+                return f"No directories found matching pattern '{name_pattern}' in {path}"
+            
+            # Create a formatted list of paths
+            output_lines = [
+                f"Found {match_count} director{'y' if match_count == 1 else 'ies'} matching '{name_pattern}':",
+                ""
+            ]
+            
+            for i, match in enumerate(matches, 1):
+                output_lines.append(f"{i}. {match['path']}")
+            
+            if result.get("truncated"):
+                output_lines.append(f"\n(Results limited to {limit}. There may be more matches.)")
+            
+            return "\n".join(output_lines)
 
         @tool
         def read_file(
@@ -242,19 +301,21 @@ class FileSystemAgent:
         @tool
         def get_directory_tree(
             path: str,
-            max_depth: int = 3,
+            max_depth: int | None = 3,
             include_hidden: bool = False,
         ) -> dict:
             """Get hierarchical directory tree structure.
             
             Args:
                 path: Root directory path
-                max_depth: Maximum depth to traverse
+                max_depth: Maximum depth to traverse (use large number like 100 for unlimited)
                 include_hidden: If True, include hidden files/directories
             """
+            # Handle None max_depth by using a large number
+            depth = max_depth if max_depth is not None else 100
             return FileSystemTools.get_directory_tree(
                 path=path,
-                max_depth=max_depth,
+                max_depth=depth,
                 include_hidden=include_hidden,
             )
 
@@ -288,14 +349,15 @@ class FileSystemAgent:
             return SystemTools.get_cpu_info(include_per_cpu=include_per_cpu)
 
         @tool
-        def get_process_list(sort_by: str = "memory", limit: int = 10) -> dict:
+        def get_process_list(sort_by: str | None = None, limit: int = 10) -> dict:
             """Get list of running processes.
             
             Args:
-                sort_by: Sort by "memory", "cpu", "name", or "pid"
+                sort_by: Sort by "memory", "cpu", "name", or "pid" (default: "memory")
                 limit: Maximum number of processes to return
             """
-            return SystemTools.get_process_list(sort_by=sort_by, limit=limit)
+            sort_option = sort_by if sort_by is not None else "memory"
+            return SystemTools.get_process_list(sort_by=sort_option, limit=limit)
 
         # Security Tools
         @tool
@@ -327,19 +389,21 @@ class FileSystemAgent:
             return SecurityTools.get_permissions(path=path)
 
         @tool
-        def get_file_hash(path: str, algorithm: str = "sha256") -> dict:
+        def get_file_hash(path: str, algorithm: str | None = None) -> dict:
             """Calculate cryptographic hash of a file.
             
             Args:
                 path: File path to hash
-                algorithm: Hash algorithm - "md5", "sha1", "sha256", "sha512"
+                algorithm: Hash algorithm - "md5", "sha1", "sha256", "sha512" (default: "sha256")
             """
-            return SecurityTools.get_file_hash(path=path, algorithm=algorithm)
+            algo = algorithm if algorithm is not None else "sha256"
+            return SecurityTools.get_file_hash(path=path, algorithm=algo)
 
         # Collect all tools
         tools.extend([
             list_directory,
             search_files,
+            search_directories,
             read_file,
             write_file,
             delete_path,

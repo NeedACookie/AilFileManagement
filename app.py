@@ -5,6 +5,11 @@ Provides an interactive chat interface for communicating with the AI agent
 to perform file system operations through natural language.
 """
 
+import os
+
+# Disable telemetry and external connections
+os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+
 import streamlit as st
 import json
 from pathlib import Path

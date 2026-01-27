@@ -10,9 +10,10 @@ from tools.security import SecurityTools
 
 # Collect all tools in a single list for easy access
 all_tools = [
-    # File System Tools (11 tools)
+    # File System Tools (12 tools)
     FileSystemTools.list_directory,
     FileSystemTools.search_files,
+    FileSystemTools.search_directories,
     FileSystemTools.read_file,
     FileSystemTools.write_file,
     FileSystemTools.delete_path,
