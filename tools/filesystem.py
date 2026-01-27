@@ -51,7 +51,7 @@ class FileSystemTools:
 
             items = []
 
-            def _process_entry(entry_path: Path, depth: int = 0) -> None:
+            def _process_entry(entry_path: Path, depth: int = 0):
                 """Process a single directory entry."""
                 if max_depth is not None and depth > max_depth:
                     return
@@ -61,12 +61,17 @@ class FileSystemTools:
                     if not include_hidden and entry_path.name.startswith("."):
                         return
 
-                    # Apply pattern filter
-                    if pattern and not fnmatch.fnmatch(entry_path.name, pattern):
+                    # Check if it's a file or directory
+                    is_dir = entry_path.is_dir()
+                    is_file = entry_path.is_file()
+
+                    # Apply pattern filter ONLY to files, not directories
+                    # This allows recursion into subdirectories
+                    if pattern and is_file and not fnmatch.fnmatch(entry_path.name, pattern):
                         return
 
                     # Apply file type filter
-                    if file_types and entry_path.is_file():
+                    if file_types and is_file:
                         if entry_path.suffix.lower() not in [ft.lower() for ft in file_types]:
                             return
 
@@ -74,17 +79,24 @@ class FileSystemTools:
                     item = {
                         "name": entry_path.name,
                         "path": str(entry_path),
-                        "type": "directory" if entry_path.is_dir() else "file",
-                        "size": stat.st_size if entry_path.is_file() else None,
+                        "type": "directory" if is_dir else "file",
+                        "size": stat.st_size if is_file else None,
                         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                         "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
                         "permissions": oct(stat.st_mode)[-3:],
-                        "extension": entry_path.suffix if entry_path.is_file() else None,
+                        "extension": entry_path.suffix if is_file else None,
                     }
-                    items.append(item)
+                    
+                    # Only add files to the list if pattern is set
+                    # Add both files and directories if no pattern
+                    if pattern:
+                        if is_file:
+                            items.append(item)
+                    else:
+                        items.append(item)
 
                     # Recurse into subdirectories
-                    if recursive and entry_path.is_dir():
+                    if recursive and is_dir:
                         for child in entry_path.iterdir():
                             _process_entry(child, depth + 1)
 

@@ -75,8 +75,11 @@ class FileSystemAgent:
             include_hidden: bool = False,
             pattern: str | None = None,
             sort_by: str | None = None,
-        ) -> dict:
+        ) -> str:
             """List directory contents with optional filtering and sorting.
+            
+            When listing many files (>50), returns a summary with counts.
+            For detailed file lists, use with pattern filter or non-recursive mode.
             
             Args:
                 path: Directory path to list
@@ -84,17 +87,48 @@ class FileSystemAgent:
                 include_hidden: If True, include hidden files
                 pattern: Glob pattern to filter files (e.g., "*.py")
                 sort_by: Sort by "name", "size", "modified", "created", or "type" (default: "name")
+            
+            Returns:
+                Summary string with counts, or detailed list for small results
             """
             # Default sort_by to "name" if None
             sort_option = sort_by if sort_by is not None else "name"
             
-            return FileSystemTools.list_directory(
+            result = FileSystemTools.list_directory(
                 path=path,
                 recursive=recursive,
                 include_hidden=include_hidden,
                 pattern=pattern,
                 sort_by=sort_option,
             )
+            
+            # Handle errors
+            if result.get("status") == "error":
+                return f"Error: {result.get('message')}"
+            
+            file_count = result.get("file_count", 0)
+            dir_count = result.get("dir_count", 0)
+            total_count = result.get("total_count", 0)
+            
+            # For large results (>50 items), return summary
+            if total_count > 50:
+                summary_lines = [
+                    f"Directory: {path}",
+                    f"Total items: {total_count}",
+                    f"Files: {file_count}",
+                    f"Directories: {dir_count}",
+                ]
+                
+                if pattern:
+                    summary_lines.append(f"Pattern: {pattern}")
+                if recursive:
+                    summary_lines.append("(Recursive search)")
+                
+                return "\n".join(summary_lines)
+            
+            # For small results, return detailed list
+            import json
+            return json.dumps(result, indent=2)
 
         @tool
         def search_files(
