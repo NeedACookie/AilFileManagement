@@ -48,7 +48,7 @@ st.markdown("""
         border-left: 4px solid #4caf50;
     }
     .tool-call {
-        background-color: #fff3e0;
+        background-color: #cca76c;
         border-left: 4px solid #ff9800;
         padding: 0.5rem;
         margin: 0.5rem 0;

@@ -10,7 +10,7 @@ import os
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_ENDPOINT"] = ""
 
-from typing import Annotated, TypedDict, Sequence
+from typing import Annotated, TypedDict, Sequence, Any
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
@@ -47,6 +47,41 @@ class FileSystemAgent:
         self.model_name = model_name
         self.temperature = temperature
         self.safe_zones = safe_zones or []
+        
+        # System prompt to guide the agent's behavior
+        self.system_prompt = """You are a helpful file system assistant. When using tools:
+
+1. **Extract Key Information**: When tools return JSON, extract the most important information:
+   - For counts: Just state the number (e.g., "216 Python files found")
+   - For searches: List ALL results, not just a subset
+   - For file info: Summarize the essential details
+
+2. **Be Concise**: Users want answers, not descriptions of JSON structure
+   - ❌ BAD: "The output appears to be a JSON object containing..."
+   - ✅ GOOD: "Found 5 files >= 1GB: file1.bin (1.2GB), file2.app (1.5GB)..."
+
+3. **Show ALL Results**: When listing files, show EVERY file found, not just the first few
+   - If there are 47 files, list all 47 files
+   - Don't truncate or limit the list
+   - Users need to see the complete results
+
+4. **Use Tool Parameters Correctly**:
+   - Only use parameters the user explicitly mentions
+   - Don't add file_types unless user specifies file types/extensions
+   - Don't guess or assume parameters
+   
+5. **Size Filters - CRITICAL**:
+   - "files >= 1GB" → min_size=1073741824, max_size=None (NOT the same value!)
+   - "files <= 1GB" → min_size=None, max_size=1073741824
+   - "files between 1GB and 2GB" → min_size=1073741824, max_size=2147483648
+   - NEVER set min_size and max_size to the same value unless searching for exact size
+
+6. **Answer Directly**: 
+   - If asked "how many", give the number
+   - If asked "find", list what was found
+   - If asked "show", display the relevant information
+
+Remember: You're helping users manage their files, not explaining JSON formats."""
 
         # Initialize LLM
         self.llm = ChatOllama(
@@ -133,30 +168,114 @@ class FileSystemAgent:
         @tool
         def search_files(
             path: str,
-            name_pattern: str | None = None,
-            content_pattern: str | None = None,
-            file_types: list[str] | None = None,
-            min_size: int | None = None,
-            max_size: int | None = None,
-        ) -> dict:
+            name_pattern: Any = None,
+            content_pattern: Any = None,
+            file_types: Any = None,
+            min_size: Any = None,
+            max_size: Any = None,
+            max_results: Any = None,
+        ) -> str:
             """Search for files with multiple criteria.
+            
+            ⚠️ CRITICAL: DO NOT USE file_types UNLESS USER EXPLICITLY MENTIONS FILE TYPES/EXTENSIONS ⚠️
+            
+            Examples:
+            - "find large files" → file_types=None (NO file types mentioned)
+            - "find files >= 1GB" → file_types=None (NO file types mentioned)
+            - "find Python files" → file_types=[".py"] (YES, Python explicitly mentioned)
+            - "find .app and .bin files" → file_types=[".app", ".bin"] (YES, extensions explicitly mentioned)
+            
+            If the user does NOT mention specific file types or extensions, leave file_types as None.
+            DO NOT guess or assume file types based on size or other criteria.
             
             Args:
                 path: Root directory to search
-                name_pattern: Glob pattern for filename (e.g., "*.py")
-                content_pattern: Text pattern to search within files
-                file_types: List of file extensions (e.g., [".py", ".txt"])
-                min_size: Minimum file size in bytes
-                max_size: Maximum file size in bytes
+                name_pattern: Glob pattern for filename - only if user specifies
+                content_pattern: Text pattern to search within files - only if user specifies
+                file_types: List of file extensions - ONLY if user explicitly requests specific file types
+                min_size: Minimum file size in bytes - use when user mentions size
+                max_size: Maximum file size in bytes - use when user mentions size
+                max_results: Maximum number of results to return (default: 100, use higher for comprehensive searches)
+            
+            Returns:
+                Formatted string with search results
             """
-            return FileSystemTools.search_files(
+            # Clean up parameters - convert empty dicts/invalid types to None
+            if not isinstance(name_pattern, str) or name_pattern == "":
+                name_pattern = None
+            if not isinstance(content_pattern, str) or content_pattern == "":
+                content_pattern = None
+            if not isinstance(file_types, list) or len(file_types) == 0:
+                file_types = None
+            
+            # Convert string numbers to integers
+            if isinstance(min_size, str):
+                try:
+                    min_size = int(min_size)
+                except (ValueError, TypeError):
+                    min_size = None
+            elif not isinstance(min_size, int):
+                min_size = None
+                
+            if isinstance(max_size, str):
+                try:
+                    max_size = int(max_size)
+                except (ValueError, TypeError):
+                    max_size = None
+            elif not isinstance(max_size, int):
+                max_size = None
+            
+            # Handle max_results
+            if isinstance(max_results, str):
+                try:
+                    max_results = int(max_results)
+                except (ValueError, TypeError):
+                    max_results = 100  # Default
+            elif not isinstance(max_results, int):
+                max_results = 100  # Default
+            
+            result = FileSystemTools.search_files(
                 path=path,
                 name_pattern=name_pattern,
                 content_pattern=content_pattern,
                 file_types=file_types,
                 min_size=min_size,
                 max_size=max_size,
+                max_results=max_results,
             )
+            
+            # Format the output for better LLM understanding
+            if result.get("status") == "error":
+                return f"Error: {result.get('message')}"
+            
+            matches = result.get("matches", [])
+            match_count = result.get("match_count", 0)
+            
+            if match_count == 0:
+                return f"No files found matching the criteria in {path}"
+            
+            # Format as numbered list with file sizes
+            output_lines = [f"Found {match_count} file(s):\n"]
+            
+            for i, match in enumerate(matches, 1):
+                name = match.get("name", "unknown")
+                file_path = match.get("path", "")
+                size = match.get("size", 0)
+                
+                # Format size in human-readable format
+                if size >= 1e9:
+                    size_str = f"{size / 1e9:.2f} GB"
+                elif size >= 1e6:
+                    size_str = f"{size / 1e6:.2f} MB"
+                elif size >= 1e3:
+                    size_str = f"{size / 1e3:.2f} KB"
+                else:
+                    size_str = f"{size} bytes"
+                
+                output_lines.append(f"{i}. {name} ({size_str})")
+                output_lines.append(f"   Path: {file_path}")
+            
+            return "\n".join(output_lines)
 
         @tool
         def search_directories(
@@ -489,7 +608,16 @@ class FileSystemAgent:
 
     def _call_model(self, state: AgentState) -> dict:
         """Call the LLM with the current state."""
+        from langchain_core.messages import SystemMessage
+        
         messages = state["messages"]
+        
+        # Prepend system prompt on first user message
+        # Check if there's no SystemMessage yet
+        has_system = any(isinstance(msg, SystemMessage) for msg in messages)
+        if not has_system:
+            messages = [SystemMessage(content=self.system_prompt)] + messages
+        
         response = self.llm_with_tools.invoke(messages)
         return {"messages": [response]}
 
