@@ -147,6 +147,7 @@ class FileSystemTools:
         modified_before: str | None = None,
         case_sensitive: bool = False,
         max_results: int = 100,
+        exclude_dirs: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Search for files with multiple criteria.
@@ -162,6 +163,7 @@ class FileSystemTools:
             modified_before: ISO format datetime string
             case_sensitive: If True, case-sensitive search
             max_results: Maximum number of results to return
+            exclude_dirs: List of directory names to exclude (e.g., [".venv", "node_modules"])
 
         Returns:
             Dictionary with status and matching files
@@ -173,6 +175,8 @@ class FileSystemTools:
 
             matches = []
             searched_count = 0
+            total_matches = 0  # Track total number of matches
+
 
 
             def _matches_criteria(file_path: Path) -> bool:
@@ -229,33 +233,38 @@ class FileSystemTools:
                     return False
 
             # Walk through directory tree
-            for root, _, files in os.walk(search_path):
+            exclude_set = set(exclude_dirs) if exclude_dirs else set()
+            for root, dirs, files in os.walk(search_path):
+                # Remove excluded directories from dirs to prevent os.walk from entering them
+                if exclude_set:
+                    dirs[:] = [d for d in dirs if d not in exclude_set]
+                
                 for filename in files:
-                    if len(matches) >= max_results:
-                        break
-
                     file_path = Path(root) / filename
                     searched_count += 1
 
                     if _matches_criteria(file_path):
-                        stat = file_path.stat()
-                        matches.append({
-                            "name": file_path.name,
-                            "path": str(file_path),
-                            "size": stat.st_size,
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            "extension": file_path.suffix,
-                        })
+                        total_matches += 1  # Always count matches
+                        # Only store up to max_results for performance
+                        if len(matches) < max_results:
+                            stat = file_path.stat()
+                            matches.append({
+                                "name": file_path.name,
+                                "path": str(file_path),
+                                "size": stat.st_size,
+                                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                "extension": file_path.suffix,
+                            })
 
-                if len(matches) >= max_results:
-                    break
+
 
             return {
                 "status": "success",
                 "matches": matches,
-                "match_count": len(matches),
+                "match_count": total_matches,
+                "returned_count": len(matches),
                 "searched_count": searched_count,
-                "truncated": len(matches) >= max_results,
+                "truncated": total_matches > max_results,
             }
 
         except Exception as e:

@@ -35,18 +35,21 @@ class FileSystemAgent:
         model_name: str = "llama3.2",
         temperature: float = 0.0,
         safe_zones: list[str] | None = None,
+        openai_api_key: str | None = None,
     ):
         """
         Initialize the file system agent.
 
         Args:
-            model_name: Ollama model name (default: llama3.2)
+            model_name: Model name. Use 'openai:gpt-4o' for OpenAI, or 'llama3.2' for Ollama
             temperature: LLM temperature (0.0 = deterministic)
             safe_zones: List of allowed directories for operations
+            openai_api_key: OpenAI API key (required if using OpenAI models)
         """
         self.model_name = model_name
         self.temperature = temperature
         self.safe_zones = safe_zones or []
+        self.openai_api_key = openai_api_key
         
         # System prompt to guide the agent's behavior
         self.system_prompt = """You are a helpful file system assistant.
@@ -68,11 +71,34 @@ IMPORTANT - File Type Filtering:
   * "CSV files" → file_types=[".csv"]
   * "Python and JavaScript files" → file_types=[".py", ".js"]
 
+IMPORTANT - Directory Exclusion:
+- When user asks to exclude directories (e.g., "except .venv", "excluding node_modules"), use exclude_dirs parameter
+- exclude_dirs must be a LIST of directory names: [".venv"], ["node_modules", "__pycache__"], etc.
+- Common exclusions: [".venv", ".git", "node_modules", "__pycache__", ".tox", "dist", "build"]
+- Examples:
+  * "except .venv folders" → exclude_dirs=[".venv"]
+  * "excluding node_modules and cache" → exclude_dirs=["node_modules", "__pycache__"]
+
 Remember: You're helping users manage files efficiently."""
 
-        # Initialize LLM
-        self.llm = ChatOllama(
-            model=model_name,
+        # Initialize LLM based on model name
+        if model_name.startswith("openai:"):
+            # OpenAI model
+            from langchain_openai import ChatOpenAI
+            
+            actual_model = model_name.replace("openai:", "")
+            if not openai_api_key:
+                raise ValueError("OpenAI API key is required when using OpenAI models")
+            
+            self.llm = ChatOpenAI(
+                model=actual_model,
+                temperature=temperature,
+                api_key=openai_api_key,
+            )
+        else:
+            # Ollama model (local)
+            self.llm = ChatOllama(
+                model=model_name,
             temperature=temperature,
         )
 
@@ -162,6 +188,7 @@ Remember: You're helping users manage files efficiently."""
             max_size: Any = None,
             max_results: Any = None,
             sort_by: Any = None,
+            exclude_dirs: Any = None,
         ) -> str:
             """Search for files with multiple criteria.
             
@@ -174,6 +201,7 @@ Remember: You're helping users manage files efficiently."""
                 max_size: Maximum file size in bytes
                 max_results: Maximum number of results to return
                 sort_by: Sort order ("size", "name", "modified")
+                exclude_dirs: List of directory names to exclude (e.g., [".venv", "node_modules", "__pycache__"])
             """
             # Clean up parameters
             if not isinstance(name_pattern, str) or name_pattern == "": name_pattern = None
@@ -193,6 +221,21 @@ Remember: You're helping users manage files efficiently."""
                         file_types = None
                 elif not isinstance(file_types, list) or len(file_types) == 0:
                     file_types = None
+            
+            # Handle exclude_dirs - can be a list or a string representation of a list
+            if exclude_dirs is not None:
+                if isinstance(exclude_dirs, str):
+                    # Try to parse as JSON if it looks like a list
+                    import json
+                    try:
+                        exclude_dirs = json.loads(exclude_dirs)
+                        if not isinstance(exclude_dirs, list) or len(exclude_dirs) == 0:
+                            exclude_dirs = None
+                    except (json.JSONDecodeError, ValueError):
+                        # If not valid JSON, treat as None
+                        exclude_dirs = None
+                elif not isinstance(exclude_dirs, list) or len(exclude_dirs) == 0:
+                    exclude_dirs = None
             
             # Convert numbers
             def clean_int(val):
@@ -228,6 +271,7 @@ Remember: You're helping users manage files efficiently."""
                 min_size=min_size,
                 max_size=max_size,
                 max_results=actual_max_results,
+                exclude_dirs=exclude_dirs,
             )
             
             # Format the output for better LLM understanding
@@ -256,14 +300,21 @@ Remember: You're helping users manage files efficiently."""
             
             # Format as numbered list with file sizes
             sort_desc = "smallest" if not reverse_sort else "largest"
+            returned_count = result.get("returned_count", len(matches))
+            is_truncated = result.get("truncated", False)
             
             # Start with a clear summary that emphasizes the count
             output_lines = [
                 f"SEARCH COMPLETE:",
                 f"Total files found: {match_count}",
-                f"Showing top {display_limit} {sort_desc} by size:",
-                ""
             ]
+            
+            if is_truncated:
+                output_lines.append(f"Showing top {returned_count} {sort_desc} by size (results limited):")
+            else:
+                output_lines.append(f"Showing all {returned_count} files sorted by size ({sort_desc} first):")
+            
+            output_lines.append("")
             
             for i, match in enumerate(matches_sorted[:display_limit], 1):
                 name = match.get("name", "unknown")
