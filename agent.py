@@ -59,6 +59,15 @@ Guidelines:
 - When finding "top N files by size", don't set size filters - let the tool sort by size
 - Answer directly: if asked "how many", give the number; if asked "find", list what was found
 
+IMPORTANT - File Type Filtering:
+- When user asks for specific file types (e.g., "Python files", ".py files"), you MUST use the file_types parameter
+- file_types must be a LIST of extensions: [".py"], [".txt", ".md"], etc.
+- Examples:
+  * "Python files" → file_types=[".py"]
+  * "text files" → file_types=[".txt"]
+  * "CSV files" → file_types=[".csv"]
+  * "Python and JavaScript files" → file_types=[".py", ".js"]
+
 Remember: You're helping users manage files efficiently."""
 
         # Initialize LLM
@@ -158,9 +167,9 @@ Remember: You're helping users manage files efficiently."""
             
             Args:
                 path: Root directory to search
-                name_pattern: Glob pattern for filename
+                name_pattern: Glob pattern for filename (e.g., "*.txt")
                 content_pattern: Text pattern to search within files
-                file_types: List of file extensions
+                file_types: List of file extensions (e.g., [".py", ".txt"]). MUST be a list, not a string.
                 min_size: Minimum file size in bytes
                 max_size: Maximum file size in bytes
                 max_results: Maximum number of results to return
@@ -169,7 +178,21 @@ Remember: You're helping users manage files efficiently."""
             # Clean up parameters
             if not isinstance(name_pattern, str) or name_pattern == "": name_pattern = None
             if not isinstance(content_pattern, str) or content_pattern == "": content_pattern = None
-            if not isinstance(file_types, list) or len(file_types) == 0: file_types = None
+            
+            # Handle file_types - can be a list or a string representation of a list
+            if file_types is not None:
+                if isinstance(file_types, str):
+                    # Try to parse as JSON if it looks like a list
+                    import json
+                    try:
+                        file_types = json.loads(file_types)
+                        if not isinstance(file_types, list) or len(file_types) == 0:
+                            file_types = None
+                    except (json.JSONDecodeError, ValueError):
+                        # If not valid JSON, treat as None
+                        file_types = None
+                elif not isinstance(file_types, list) or len(file_types) == 0:
+                    file_types = None
             
             # Convert numbers
             def clean_int(val):
@@ -233,7 +256,14 @@ Remember: You're helping users manage files efficiently."""
             
             # Format as numbered list with file sizes
             sort_desc = "smallest" if not reverse_sort else "largest"
-            output_lines = [f"Found {match_count} file(s), showing top {display_limit} {sort_desc} by size:\n"]
+            
+            # Start with a clear summary that emphasizes the count
+            output_lines = [
+                f"SEARCH COMPLETE:",
+                f"Total files found: {match_count}",
+                f"Showing top {display_limit} {sort_desc} by size:",
+                ""
+            ]
             
             for i, match in enumerate(matches_sorted[:display_limit], 1):
                 name = match.get("name", "unknown")

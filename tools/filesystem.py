@@ -174,6 +174,7 @@ class FileSystemTools:
             matches = []
             searched_count = 0
 
+
             def _matches_criteria(file_path: Path) -> bool:
                 """Check if file matches all search criteria."""
                 try:
@@ -185,8 +186,12 @@ class FileSystemTools:
                             return False
 
                     # File type
-                    if file_types and file_path.suffix.lower() not in [ft.lower() for ft in file_types]:
-                        return False
+                    if file_types:
+                        file_ext = file_path.suffix.lower()
+                        allowed_exts = [ft.lower() for ft in file_types]
+                        if file_ext not in allowed_exts:
+                            return False
+
 
                     stat = file_path.stat()
 
