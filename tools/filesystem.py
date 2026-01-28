@@ -811,3 +811,148 @@ class FileSystemTools:
 
         except Exception as e:
             return {"status": "error", "message": f"Failed to build directory tree: {str(e)}"}
+
+    @staticmethod
+    def format_directory_listing(result: dict, path: str, pattern: str | None = None, recursive: bool = False) -> str:
+        """Format directory listing result for display.
+        
+        Args:
+            result: Raw result from list_directory()
+            path: Directory path that was listed
+            pattern: Pattern filter that was used (if any)
+            recursive: Whether recursive search was used
+            
+        Returns:
+            Formatted string for display
+        """
+        import json
+        
+        # Handle errors
+        if result.get("status") == "error":
+            return f"Error: {result.get('message')}"
+        
+        file_count = result.get("file_count", 0)
+        dir_count = result.get("dir_count", 0)
+        total_count = result.get("total_count", 0)
+        
+        # For large results (>50 items), return summary
+        if total_count > 50:
+            summary_lines = [
+                f"Directory: {path}",
+                f"Total items: {total_count}",
+                f"Files: {file_count}",
+                f"Directories: {dir_count}",
+            ]
+            
+            if pattern:
+                summary_lines.append(f"Pattern: {pattern}")
+            if recursive:
+                summary_lines.append("(Recursive search)")
+            
+            return "\n".join(summary_lines)
+        
+        # For small results, return detailed list
+        return json.dumps(result, indent=2)
+
+    @staticmethod
+    def format_search_results(result: dict, sort_by: str | None, requested_limit: int) -> str:
+        """Format search results for display.
+        
+        Args:
+            result: Raw result from search_files()
+            sort_by: Sort order that was requested
+            requested_limit: Number of results requested for display
+            
+        Returns:
+            Formatted string with file list
+        """
+        # Handle errors
+        if result.get("status") == "error":
+            return f"Error: {result.get('message')}"
+        
+        matches = result.get("matches", [])
+        match_count = result.get("match_count", 0)
+        
+        if match_count == 0:
+            return f"No files found matching the criteria"
+        
+        # Determine sort order
+        reverse_sort = True  # Default: Descending (Largest first)
+        is_size_sort = sort_by == "size" or (isinstance(sort_by, str) and "size" in sort_by)
+        
+        if is_size_sort:
+            # Check if user wants smallest first (asc, small, least)
+            sort_str = str(sort_by).lower()
+            if "asc" in sort_str or "small" in sort_str or "least" in sort_str:
+                reverse_sort = False
+        
+        # Sort matches by size
+        matches_sorted = sorted(matches, key=lambda x: x.get("size", 0), reverse=reverse_sort)
+        
+        # Format output
+        sort_desc = "smallest" if not reverse_sort else "largest"
+        returned_count = result.get("returned_count", len(matches))
+        is_truncated = result.get("truncated", False)
+        
+        # Start with a clear summary that emphasizes the count
+        output_lines = [
+            f"SEARCH COMPLETE:",
+            f"Total files found: {match_count}",
+        ]
+        
+        if is_truncated:
+            output_lines.append(f"Showing top {returned_count} {sort_desc} by size (results limited):")
+        else:
+            output_lines.append(f"Showing all {returned_count} files sorted by size ({sort_desc} first):")
+        
+        output_lines.append("")
+        
+        # Format each match
+        for i, match in enumerate(matches_sorted[:requested_limit], 1):
+            name = match.get("name", "unknown")
+            file_path = match.get("path", "")
+            size = match.get("size", 0)
+            
+            # Format size in human-readable format
+            if size >= 1e9:
+                size_str = f"{size / 1e9:.2f} GB"
+            elif size >= 1e6:
+                size_str = f"{size / 1e6:.2f} MB"
+            elif size >= 1e3:
+                size_str = f"{size / 1e3:.2f} KB"
+            else:
+                size_str = f"{size} bytes"
+            
+            output_lines.append(f"{i}. {name} ({size_str})")
+            output_lines.append(f"   Path: {file_path}")
+        
+        return "\n".join(output_lines)
+
+    @staticmethod
+    def format_directory_search(result: dict) -> str:
+        """Format directory search results for display.
+        
+        Args:
+            result: Raw result from search_directories()
+            
+        Returns:
+            Formatted string with directory list
+        """
+        # Handle errors
+        if result.get("status") == "error":
+            return f"Error: {result.get('message')}"
+        
+        matches = result.get("matches", [])
+        match_count = result.get("match_count", 0)
+        
+        if match_count == 0:
+            return "No directories found matching the pattern"
+        
+        # Format as numbered list
+        output_lines = [f"Found {match_count} director{'y' if match_count == 1 else 'ies'}:\n"]
+        
+        for i, match in enumerate(matches, 1):
+            path = match.get("path", "")
+            output_lines.append(f"{i}. {path}")
+        
+        return "\n".join(output_lines)

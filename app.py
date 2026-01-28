@@ -13,7 +13,6 @@ os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
 import streamlit as st
 import json
 from pathlib import Path
-from datetime import datetime
 from agent import FileSystemAgent
 
 
@@ -76,7 +75,7 @@ def initialize_session_state():
         st.session_state.safe_zones = [str(Path.home())]
     
     if "model_name" not in st.session_state:
-        st.session_state.model_name = "qwen3-coder:30b"
+        st.session_state.model_name = "gpt-4o"
     
     if "temperature" not in st.session_state:
         st.session_state.temperature = 0.0
@@ -155,39 +154,23 @@ def main():
         # Model settings
         st.subheader("🤖 Model Settings")
         
-        # Model provider selection
-        model_provider = st.selectbox(
-            "Model Provider",
-            options=["Ollama (Local)", "OpenAI (API)"],
-            index=0 if not st.session_state.model_name.startswith("openai:") else 1,
-            help="Choose between local Ollama models or OpenAI API"
+        # OpenAI model selection
+        model_name = st.selectbox(
+            "OpenAI Model",
+            options=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4"],
+            index=0 if st.session_state.model_name == "gpt-4o" else 
+                  1 if st.session_state.model_name == "gpt-4o-mini" else
+                  2 if st.session_state.model_name == "gpt-4-turbo" else 0,
+            help="Select OpenAI model to use"
         )
         
-        if model_provider == "OpenAI (API)":
-            # OpenAI model selection
-            openai_model = st.selectbox(
-                "OpenAI Model",
-                options=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4"],
-                index=0,
-                help="Select OpenAI model to use"
-            )
-            model_name = f"openai:{openai_model}"
-            
-            # OpenAI API key input
-            openai_api_key = st.text_input(
-                "OpenAI API Key",
-                value=st.session_state.openai_api_key,
-                type="password",
-                help="Enter your OpenAI API key (starts with sk-)"
-            )
-        else:
-            # Ollama model input
-            model_name = st.text_input(
-                "Ollama Model",
-                value=st.session_state.model_name if not st.session_state.model_name.startswith("openai:") else "qwen3-coder:30b",
-                help="Name of the Ollama model to use (e.g., qwen3-coder:30b, llama3.2, mistral)"
-            )
-            openai_api_key = ""
+        # OpenAI API key input
+        openai_api_key = st.text_input(
+            "OpenAI API Key",
+            value=st.session_state.openai_api_key,
+            type="password",
+            help="Enter your OpenAI API key (starts with sk-)"
+        )
         
         temperature = st.slider(
             "Temperature",
@@ -209,39 +192,15 @@ def main():
             help="Enter allowed directory paths, one per line"
         )
         
-        # Warning if settings don't match current agent
-        if st.session_state.agent:
-            current_is_openai = st.session_state.model_name.startswith("openai:")
-            selected_is_openai = model_name.startswith("openai:")
-            
-            if current_is_openai != selected_is_openai:
-                st.warning("⚠️ Settings changed! Click 'Apply Settings' to switch models.")
-        
-        
         # Update settings button
         if st.button("💾 Apply Settings"):
-            # Validate OpenAI API key if using OpenAI
-            if model_name.startswith("openai:"):
-                if not openai_api_key:
-                    st.error("❌ OpenAI API key is required when using OpenAI models")
-                elif not openai_api_key.startswith("sk-"):
-                    st.error("❌ Invalid OpenAI API key format. Key should start with 'sk-'")
-                else:
-                    # Key looks valid, proceed
-                    st.session_state.model_name = model_name
-                    st.session_state.temperature = temperature
-                    st.session_state.openai_api_key = openai_api_key
-                    st.session_state.safe_zones = [
-                        line.strip() for line in safe_zones_text.split("\n") 
-                        if line.strip()
-                    ]
-                    
-                    if create_agent():
-                        st.success("✅ Settings applied successfully! Using OpenAI.")
-                    else:
-                        st.error("❌ Failed to create agent. Check your API key and try again.")
+            # Validate OpenAI API key
+            if not openai_api_key:
+                st.error("❌ OpenAI API key is required")
+            elif not openai_api_key.startswith("sk-"):
+                st.error("❌ Invalid OpenAI API key format. Key should start with 'sk-'")
             else:
-                # Ollama model, no API key needed
+                # Key looks valid, proceed
                 st.session_state.model_name = model_name
                 st.session_state.temperature = temperature
                 st.session_state.openai_api_key = openai_api_key
@@ -251,9 +210,10 @@ def main():
                 ]
                 
                 if create_agent():
-                    st.success("✅ Settings applied successfully! Using Ollama (Local).")
+                    st.success("✅ Settings applied successfully!")
                 else:
-                    st.error("❌ Failed to apply settings")
+                    st.error("❌ Failed to create agent. Check your API key and try again.")
+        
         
         # Initialize agent if not exists
         if st.session_state.agent is None:
@@ -267,15 +227,9 @@ def main():
         if st.session_state.agent:
             st.success("🟢 Agent Ready")
             
-            # Show model provider clearly
-            if st.session_state.model_name.startswith("openai:"):
-                model_display = st.session_state.model_name.replace("openai:", "")
-                st.info(f"**Provider:** 🌐 OpenAI")
-                st.info(f"**Model:** {model_display}")
-            else:
-                st.info(f"**Provider:** 💻 Ollama (Local)")
-                st.info(f"**Model:** {st.session_state.model_name}")
-            
+            # Show OpenAI model info
+            st.info(f"**Provider:** 🌐 OpenAI")
+            st.info(f"**Model:** {st.session_state.model_name}")
             st.info(f"**Temperature:** {st.session_state.temperature}")
             st.info(f"**Safe Zones:** {len(st.session_state.safe_zones)}")
         else:

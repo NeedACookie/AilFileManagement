@@ -1,7 +1,7 @@
 """
 LangGraph agent for file system operations.
 
-Orchestrates LLM reasoning with tool execution using local Llama 3.2 via Ollama.
+Orchestrates LLM reasoning with tool execution using OpenAI GPT-4o.
 """
 
 import os
@@ -10,10 +10,12 @@ import os
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_ENDPOINT"] = ""
 
+from pathlib import Path
+
 from typing import Annotated, TypedDict, Sequence, Any
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import tool
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
@@ -28,11 +30,11 @@ class AgentState(TypedDict):
 
 
 class FileSystemAgent:
-    """LangGraph-based file system agent with local LLM."""
+    """LangGraph-based file system agent with OpenAI GPT-4o."""
 
     def __init__(
         self,
-        model_name: str = "llama3.2",
+        model_name: str = "gpt-4o",
         temperature: float = 0.0,
         safe_zones: list[str] | None = None,
         openai_api_key: str | None = None,
@@ -41,65 +43,30 @@ class FileSystemAgent:
         Initialize the file system agent.
 
         Args:
-            model_name: Model name. Use 'openai:gpt-4o' for OpenAI, or 'llama3.2' for Ollama
+            model_name: OpenAI model name (e.g., 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo')
             temperature: LLM temperature (0.0 = deterministic)
             safe_zones: List of allowed directories for operations
-            openai_api_key: OpenAI API key (required if using OpenAI models)
+            openai_api_key: OpenAI API key (required)
         """
         self.model_name = model_name
         self.temperature = temperature
         self.safe_zones = safe_zones or []
         self.openai_api_key = openai_api_key
         
-        # System prompt to guide the agent's behavior
-        self.system_prompt = """You are a helpful file system assistant.
+        # Load system prompt from file
+        prompt_path = Path(__file__).parent / "prompts" / "system_prompt.txt"
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            self.system_prompt = f.read().strip()
+        
 
-Guidelines:
-- Extract key information from tool outputs and present it clearly
-- Be concise - users want answers, not JSON descriptions
-- Show all results when listing files
-- Only use tool parameters that the user explicitly mentions
-- When finding "top N files by size", don't set size filters - let the tool sort by size
-- Answer directly: if asked "how many", give the number; if asked "find", list what was found
-
-IMPORTANT - File Type Filtering:
-- When user asks for specific file types (e.g., "Python files", ".py files"), you MUST use the file_types parameter
-- file_types must be a LIST of extensions: [".py"], [".txt", ".md"], etc.
-- Examples:
-  * "Python files" → file_types=[".py"]
-  * "text files" → file_types=[".txt"]
-  * "CSV files" → file_types=[".csv"]
-  * "Python and JavaScript files" → file_types=[".py", ".js"]
-
-IMPORTANT - Directory Exclusion:
-- When user asks to exclude directories (e.g., "except .venv", "excluding node_modules"), use exclude_dirs parameter
-- exclude_dirs must be a LIST of directory names: [".venv"], ["node_modules", "__pycache__"], etc.
-- Common exclusions: [".venv", ".git", "node_modules", "__pycache__", ".tox", "dist", "build"]
-- Examples:
-  * "except .venv folders" → exclude_dirs=[".venv"]
-  * "excluding node_modules and cache" → exclude_dirs=["node_modules", "__pycache__"]
-
-Remember: You're helping users manage files efficiently."""
-
-        # Initialize LLM based on model name
-        if model_name.startswith("openai:"):
-            # OpenAI model
-            from langchain_openai import ChatOpenAI
-            
-            actual_model = model_name.replace("openai:", "")
-            if not openai_api_key:
-                raise ValueError("OpenAI API key is required when using OpenAI models")
-            
-            self.llm = ChatOpenAI(
-                model=actual_model,
-                temperature=temperature,
-                api_key=openai_api_key,
-            )
-        else:
-            # Ollama model (local)
-            self.llm = ChatOllama(
-                model=model_name,
+        # Initialize OpenAI LLM
+        if not openai_api_key:
+            raise ValueError("OpenAI API key is required")
+        
+        self.llm = ChatOpenAI(
+            model=model_name,
             temperature=temperature,
+            api_key=openai_api_key,
         )
 
         # Create LangChain tools from our tool classes
@@ -150,33 +117,8 @@ Remember: You're helping users manage files efficiently."""
                 sort_by=sort_option,
             )
             
-            # Handle errors
-            if result.get("status") == "error":
-                return f"Error: {result.get('message')}"
-            
-            file_count = result.get("file_count", 0)
-            dir_count = result.get("dir_count", 0)
-            total_count = result.get("total_count", 0)
-            
-            # For large results (>50 items), return summary
-            if total_count > 50:
-                summary_lines = [
-                    f"Directory: {path}",
-                    f"Total items: {total_count}",
-                    f"Files: {file_count}",
-                    f"Directories: {dir_count}",
-                ]
-                
-                if pattern:
-                    summary_lines.append(f"Pattern: {pattern}")
-                if recursive:
-                    summary_lines.append("(Recursive search)")
-                
-                return "\n".join(summary_lines)
-            
-            # For small results, return detailed list
-            import json
-            return json.dumps(result, indent=2)
+            # Format and return
+            return FileSystemTools.format_directory_listing(result, path, pattern, recursive)
 
         @tool
         def search_files(
@@ -196,57 +138,27 @@ Remember: You're helping users manage files efficiently."""
                 path: Root directory to search
                 name_pattern: Glob pattern for filename (e.g., "*.txt")
                 content_pattern: Text pattern to search within files
-                file_types: List of file extensions (e.g., [".py", ".txt"]). MUST be a list, not a string.
+                file_types: List of file extensions (e.g., [".py", ".txt"])
                 min_size: Minimum file size in bytes
                 max_size: Maximum file size in bytes
                 max_results: Maximum number of results to return
                 sort_by: Sort order ("size", "name", "modified")
-                exclude_dirs: List of directory names to exclude (e.g., [".venv", "node_modules", "__pycache__"])
+                exclude_dirs: List of directory names to exclude (e.g., [".venv", "node_modules"])
             """
-            # Clean up parameters
-            if not isinstance(name_pattern, str) or name_pattern == "": name_pattern = None
-            if not isinstance(content_pattern, str) or content_pattern == "": content_pattern = None
+            # Clean up empty string parameters
+            if not isinstance(name_pattern, str) or name_pattern == "": 
+                name_pattern = None
+            if not isinstance(content_pattern, str) or content_pattern == "": 
+                content_pattern = None
             
-            # Handle file_types - can be a list or a string representation of a list
-            if file_types is not None:
-                if isinstance(file_types, str):
-                    # Try to parse as JSON if it looks like a list
-                    import json
-                    try:
-                        file_types = json.loads(file_types)
-                        if not isinstance(file_types, list) or len(file_types) == 0:
-                            file_types = None
-                    except (json.JSONDecodeError, ValueError):
-                        # If not valid JSON, treat as None
-                        file_types = None
-                elif not isinstance(file_types, list) or len(file_types) == 0:
-                    file_types = None
+            # Validate list parameters
+            if file_types is not None and not isinstance(file_types, list):
+                file_types = None
+            if exclude_dirs is not None and not isinstance(exclude_dirs, list):
+                exclude_dirs = None
             
-            # Handle exclude_dirs - can be a list or a string representation of a list
-            if exclude_dirs is not None:
-                if isinstance(exclude_dirs, str):
-                    # Try to parse as JSON if it looks like a list
-                    import json
-                    try:
-                        exclude_dirs = json.loads(exclude_dirs)
-                        if not isinstance(exclude_dirs, list) or len(exclude_dirs) == 0:
-                            exclude_dirs = None
-                    except (json.JSONDecodeError, ValueError):
-                        # If not valid JSON, treat as None
-                        exclude_dirs = None
-                elif not isinstance(exclude_dirs, list) or len(exclude_dirs) == 0:
-                    exclude_dirs = None
-            
-            # Convert numbers
-            def clean_int(val):
-                if isinstance(val, str):
-                    try: return int(val)
-                    except: return None
-                return val if isinstance(val, int) else None
-
-            min_size = clean_int(min_size)
-            max_size = clean_int(max_size)
-            requested_limit = clean_int(max_results) or 100
+            # Set default max_results
+            requested_limit = max_results if isinstance(max_results, int) else 100
             
             # INTELLIGENT PARAMETER HANDLING
             # If user wants to sort by size (top N largest/smallest), we must search MANY files first
@@ -274,67 +186,9 @@ Remember: You're helping users manage files efficiently."""
                 exclude_dirs=exclude_dirs,
             )
             
-            # Format the output for better LLM understanding
-            if result.get("status") == "error":
-                return f"Error: {result.get('message')}"
-            
-            matches = result.get("matches", [])
-            match_count = result.get("match_count", 0)
-            
-            if match_count == 0:
-                return f"No files found matching the criteria in {path}"
-            
-            # SORTING LOGIC
-            reverse_sort = True  # Default: Descending (Largest first)
-            
-            if is_size_sort:
-                # Check if user wants smallest first (asc, small, least)
-                sort_str = str(sort_by).lower()
-                if "asc" in sort_str or "small" in sort_str or "least" in sort_str:
-                    reverse_sort = False
-            
-            matches_sorted = sorted(matches, key=lambda x: x.get("size", 0), reverse=reverse_sort)
-            
-            # Use requested_limit for display
-            display_limit = requested_limit
-            
-            # Format as numbered list with file sizes
-            sort_desc = "smallest" if not reverse_sort else "largest"
-            returned_count = result.get("returned_count", len(matches))
-            is_truncated = result.get("truncated", False)
-            
-            # Start with a clear summary that emphasizes the count
-            output_lines = [
-                f"SEARCH COMPLETE:",
-                f"Total files found: {match_count}",
-            ]
-            
-            if is_truncated:
-                output_lines.append(f"Showing top {returned_count} {sort_desc} by size (results limited):")
-            else:
-                output_lines.append(f"Showing all {returned_count} files sorted by size ({sort_desc} first):")
-            
-            output_lines.append("")
-            
-            for i, match in enumerate(matches_sorted[:display_limit], 1):
-                name = match.get("name", "unknown")
-                file_path = match.get("path", "")
-                size = match.get("size", 0)
-                
-                # Format size in human-readable format
-                if size >= 1e9:
-                    size_str = f"{size / 1e9:.2f} GB"
-                elif size >= 1e6:
-                    size_str = f"{size / 1e6:.2f} MB"
-                elif size >= 1e3:
-                    size_str = f"{size / 1e3:.2f} KB"
-                else:
-                    size_str = f"{size} bytes"
-                
-                output_lines.append(f"{i}. {name} ({size_str})")
-                output_lines.append(f"   Path: {file_path}")
-            
-            return "\n".join(output_lines)
+            # Format and return
+            return FileSystemTools.format_search_results(result, sort_by, requested_limit)
+
 
         @tool
         def search_directories(
@@ -362,29 +216,9 @@ Remember: You're helping users manage files efficiently."""
                 max_results=limit,
             )
             
-            # Format the results for better LLM understanding
-            if result.get("status") == "error":
-                return f"Error: {result.get('message')}"
-            
-            matches = result.get("matches", [])
-            match_count = result.get("match_count", 0)
-            
-            if match_count == 0:
-                return f"No directories found matching pattern '{name_pattern}' in {path}"
-            
-            # Create a formatted list of paths
-            output_lines = [
-                f"Found {match_count} director{'y' if match_count == 1 else 'ies'} matching '{name_pattern}':",
-                ""
-            ]
-            
-            for i, match in enumerate(matches, 1):
-                output_lines.append(f"{i}. {match['path']}")
-            
-            if result.get("truncated"):
-                output_lines.append(f"\n(Results limited to {limit}. There may be more matches.)")
-            
-            return "\n".join(output_lines)
+            # Format and return
+            return FileSystemTools.format_directory_search(result)
+
 
         @tool
         def read_file(
@@ -668,67 +502,15 @@ Remember: You're helping users manage files efficiently."""
     def _call_model(self, state: AgentState) -> dict:
         """Call the LLM with the current state."""
         from langchain_core.messages import SystemMessage
-        import re
         
         messages = state["messages"]
         
         # Prepend system prompt on first user message
-        # Check if there's no SystemMessage yet
         has_system = any(isinstance(msg, SystemMessage) for msg in messages)
         if not has_system:
             messages = [SystemMessage(content=self.system_prompt)] + messages
         
         response = self.llm_with_tools.invoke(messages)
-        
-        # CUSTOM PARSER FOR QWEN / OTHER MODELS
-        # If no tool calls were detected but the content looks like a tool call
-        if not response.tool_calls and "<function=" in str(response.content):
-            content = str(response.content)
-            
-            # Regex to find <function=name> ... </tool_call> pattern
-            # Matches: <function=name> <parameter=key> value ... </tool_call>
-            func_match = re.search(r"<function=(\w+)>(.*?)(?:</tool_call>|$)", content, re.DOTALL)
-            
-            if func_match:
-                function_name = func_match.group(1)
-                params_str = func_match.group(2)
-                
-                # Parse parameters: <parameter=key> value
-                params = {}
-                # Split by <parameter= to get chunks
-                # This approach handles multi-line values better
-                parts = re.split(r"<parameter=(\w+)>", params_str)
-                
-                # parts[0] is garbage/whitespace before first param
-                # parts[1] is key1, parts[2] is value1, parts[3] is key2, parts[4] is value2...
-                if len(parts) > 1:
-                    for i in range(1, len(parts), 2):
-                        if i+1 < len(parts):
-                            key = parts[i]
-                            # content is "value </parameter> <next_tag...>"
-                            # so we need to remove the closing tag
-                            raw_val = parts[i+1]
-                            val = raw_val.split("</parameter>")[0].strip()
-                            
-                            # Try to convert types (int, bool, null)
-                            if val.lower() == 'true': val = True
-                            elif val.lower() == 'false': val = False
-                            elif val.lower() in ('null', 'none'): val = None
-                            elif val.isdigit(): val = int(val)
-                            
-                            params[key] = val
-                
-                # Construct tool call manually
-                import uuid
-                tool_call = {
-                    "name": function_name,
-                    "args": params,
-                    "id": f"call_{uuid.uuid4().hex[:8]}",
-                    "type": "tool_call"
-                }
-                
-                # Patch the response
-                response.tool_calls = [tool_call]
         
         return {"messages": [response]}
 
